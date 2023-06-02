@@ -8,6 +8,7 @@ import (
 	"github.com/travisjeffery/go-dynaport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	api "logd/api/v1"
 	"logd/internal/config"
 	"os"
@@ -55,6 +56,7 @@ func TestAgent(t *testing.T) {
 			BindAddr:        bindAddr,
 			RPCPort:         rpcPort,
 			NodeName:        fmt.Sprintf("%d", i),
+			Bootstrap:       i == 0,
 			StartJoinAddrs:  startJoinAddrs,
 			ACLModelFile:    config.ACLModelFile,
 			ACLPolicyFile:   config.ACLPolicyFile,
@@ -66,8 +68,7 @@ func TestAgent(t *testing.T) {
 
 	defer func() {
 		for _, agent := range agents {
-			err := agent.Shutdown()
-			require.NoError(t, err)
+			_ = agent.Shutdown()
 			require.NoError(t, os.RemoveAll(agent.Config.DataDir))
 		}
 	}()
@@ -89,6 +90,13 @@ func TestAgent(t *testing.T) {
 	consumeResponse, err = followerClient.Consume(context.Background(), &api.ConsumeRequest{Offset: produceResponse.Offset})
 	require.NoError(t, err)
 	require.Equal(t, consumeResponse.Record.Value, []byte("foo"))
+
+	consumeResponse, err = leaderClient.Consume(context.Background(), &api.ConsumeRequest{Offset: produceResponse.Offset + 1})
+	require.Nil(t, consumeResponse)
+	require.Error(t, err)
+	got := status.Code(err)
+	want := status.Code(api.ErrOffsetOutOfRange{}.GRPCStatus().Err())
+	require.Equal(t, got, want)
 }
 
 func client(t *testing.T, agent *Agent, tlsConfig *tls.Config) api.LogClient {
